@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "${AZURE_ENV_NAME}" },
+    "location": { "value": "${AZURE_LOCATION}" },
+    "samplingRatio": { "value": "${TRACING_SAMPLING_RATIO=1.0}" },
+    "apimPublisherEmail": { "value": "${APIM_PUBLISHER_EMAIL=admin@example.com}" }
+  }
+}

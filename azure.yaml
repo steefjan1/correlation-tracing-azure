@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: correlation-tracing-azure
+metadata:
+  template: correlation-tracing-azure@0.1.0
+
+infra:
+  provider: bicep
+  path: infra
+
+hooks:
+  postprovision:
+    shell: pwsh
+    run: ./scripts/postprovision.ps1
+    interactive: true
+
+services:
+  api:
+    project: ./src/OrderApi
+    language: dotnet
+    host: appservice
+  workers:
+    project: ./src/Workers
+    language: dotnet
+    host: function

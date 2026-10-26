@@ -1,0 +1,9 @@
+bin/
+obj/
+.azure/
+measure/.env
+local.settings.json
+*.user
+.vs/
+.vscode/
+__pycache__/

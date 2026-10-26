@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orders: two identities</title>
+<style>
+  :root { --ink:#1b1b1f; --mute:#5f6368; --line:#dadce0; --ok:#1e7e34; --warn:#b26a00; --bad:#b3261e; --blue:#0f6cbd; }
+  body { margin:0; font:15px/1.5 Segoe UI, Inter, system-ui, sans-serif; color:var(--ink); background:#f6f7f9; }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 4px; } p.sub { margin:0 0 16px; color:var(--mute); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+  button, input { border:1px solid var(--line); background:#fff; border-radius:8px; padding:9px 13px; font:inherit; }
+  button { cursor:pointer; } button:hover { border-color:var(--blue); }
+  button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); font-size:13px; vertical-align:top; }
+  th { background:#fafbfc; color:var(--mute); font-weight:600; }
+  code { font-family:Cascadia Code, Consolas, monospace; font-size:12px; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; background:#eef1f5; }
+  .Pending { background:#fff4e0; color:var(--warn); } .Captured, .Sent, .Placed { background:#e6f4ea; color:var(--ok); }
+  .Declined, .Failed { background:#fce8e6; color:var(--bad); }
+  .note { color:var(--mute); font-size:13px; }
+  pre { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; overflow:auto; font-size:12.5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Orders: two identities per request</h1>
+  <p class="sub">Each order gets a business <strong>correlation id</strong> (yours if you send <code>X-Correlation-ID</code>, otherwise minted) and a platform <strong>trace id</strong> (W3C). Workers update the row as the trace continues over Service Bus.</p>
+
+  <div class="row">
+    <input id="corr" placeholder="X-Correlation-ID (optional, e.g. ticket-4711)" size="34">
+    <button class="primary" onclick="send('BOOK-1')">Place order</button>
+    <button onclick="send('SLOW-PAY')">Slow payment (provider takes 5 s)</button>
+    <button onclick="send('FAIL-ONCE')">Worker fails once (redelivery)</button>
+    <button onclick="send('DECLINE')">Declined by provider</button>
+    <button onclick="refresh()">Refresh</button>
+  </div>
+  <p class="note" id="last"></p>
+
+  <table>
+    <thead><tr><th>Order</th><th>SKU</th><th>Correlation id</th><th>Trace id</th><th>Order</th><th>Payment</th><th>Notification</th><th>Created</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <h2 style="font-size:17px;margin:22px 0 8px">Detail</h2>
+  <pre id="detail">Select an order. paymentTraceId and notificationTraceId show whether the workers ran inside the same trace as the API call.</pre>
+</main>
+<script>
+  // The page may be served under a gateway prefix (/orders/, /orders/index.html or /orders), so
+  // resolve the API path relative to the page the way a browser resolves a relative link.
+  let pageHref = location.href.split(/[?#]/)[0];
+  if (!location.pathname.endsWith('/') && !/\.[a-z0-9]+$/i.test(location.pathname)) pageHref += '/';
+  const api = new URL('api/orders', pageHref).toString();
+  const fmt = v => v ? new Date(v).toLocaleTimeString() : '';
+  async function send(sku) {
+    const h = { 'Content-Type':'application/json' };
+    const c = document.getElementById('corr').value.trim(); if (c) h['X-Correlation-ID'] = c;
+    const r = await fetch(api, { method:'POST', headers:h, body: JSON.stringify({ customerId:'demo', sku, amount: 10 + Math.floor(Math.random()*90) }) });
+    const j = await r.json();
+    document.getElementById('last').textContent = `HTTP ${r.status}: order ${j.orderId}, correlation ${j.correlationId}, trace ${j.traceId}`;
+    await refresh();
+  }
+  async function refresh() {
+    const list = await (await fetch(api)).json();
+    document.getElementById('rows').innerHTML = list.map(o => `
+      <tr><td><code>${o.orderId}</code></td><td>${o.sku}</td><td><code>${o.correlationId}</code></td><td><code>${(o.traceId||'').slice(0,12)}…</code></td>
+      <td><span class="pill ${o.status}">${o.status}</span></td><td><span class="pill ${o.paymentStatus}">${o.paymentStatus}</span></td>
+      <td><span class="pill ${o.notificationStatus}">${o.notificationStatus}</span></td><td>${fmt(o.createdUtc)}</td>
+      <td><button onclick="detail('${o.orderId}')">Detail</button></td></tr>`).join('');
+  }
+  async function detail(id) {
+    const j = await (await fetch(api + '/' + id)).json();
+    j.sameTraceInPaymentWorker = j.paymentTraceId ? j.paymentTraceId === j.traceId : null;
+    j.sameTraceInNotificationWorker = j.notificationTraceId ? j.notificationTraceId === j.traceId : null;
+    document.getElementById('detail').textContent = JSON.stringify(j, null, 2);
+  }
+  refresh(); setInterval(refresh, 4000);
+</script>
+</body>
+</html>

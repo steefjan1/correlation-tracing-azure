@@ -1,0 +1,51 @@
+// Application Insights (workspace-based). Run in the Log Analytics workspace or the App Insights Logs blade.
+// The workspace tables are AppRequests / AppDependencies / AppTraces / AppExceptions; in the App Insights
+// blade use requests / dependencies / traces / exceptions and customDimensions instead of Properties.
+
+// 1. The engineer's view: one trace, every span, every service, ordered. Take the trace id from drive.py.
+union AppRequests, AppDependencies
+| where OperationId == "<trace id>"
+| project TimeGenerated, AppRoleName, Type, Name, DurationMs, Success, ParentId, Id,
+          CorrelationId = tostring(Properties["correlation.id"])
+| order by TimeGenerated asc
+
+// 2. The service desk's view: one business correlation id, every span, even across separate traces.
+//    Works for a gateway-minted id (gw-...) and for a client-supplied one (ticket-...).
+union AppRequests, AppDependencies, AppTraces
+| where tostring(Properties["correlation.id"]) == "<correlation id>" or tostring(Properties["CorrelationId"]) == "<correlation id>"
+| project TimeGenerated, AppRoleName, Type, Name = column_ifexists("Name", ""), Message = column_ifexists("Message", ""), OperationId
+| order by TimeGenerated asc
+
+// 3. Did the context arrive at the provider? Tags set by PaymentProvider on its own request span.
+AppRequests
+| where Name has "payments"
+| extend traceparent = tobool(Properties["context.traceparent.arrived"]),
+         baggage = tobool(Properties["context.baggage.arrived"]),
+         header = tobool(Properties["context.correlation_header.arrived"])
+| summarize count() by Url, traceparent, baggage, header
+
+// 4. Redelivery inside one trace: FAIL-ONCE orders, one request span per delivery, same OperationId.
+AppRequests
+| where AppRoleName startswith "func-" and Name == "PaymentWorker"
+| extend Delivery = toint(Properties["messaging.message.delivery_count"]), CorrelationId = tostring(Properties["correlation.id"])
+| summarize Deliveries = count(), Failed = countif(Success == false), Traces = dcount(OperationId) by CorrelationId
+| where Deliveries > 1
+
+// 5. Where the time went for one slow order: the provider dominates, not the API.
+AppDependencies
+| where OperationId == "<trace id of a SLOW-PAY order>"
+| project TimeGenerated, AppRoleName, Name, Target, DurationMs
+| order by DurationMs desc
+
+// 6. Sampling: with TRACING_SAMPLING_RATIO=0.1 a trace should be complete or absent, never partial.
+//    Expected spans per order: gateway request, API request, provider authorize, PaymentWorker, provider capture, NotificationWorker.
+let ids = dynamic(["<paste trace ids from measure/burst-trace-ids.txt>"]);
+AppRequests
+| where OperationId in (ids)
+| summarize Spans = count(), Roles = dcount(AppRoleName) by OperationId
+| summarize Traces = count(), Complete = countif(Spans >= 6), Partial = countif(Spans < 6)
+
+// 7. Gateway minted vs client supplied: how many requests arrived without an X-Correlation-ID?
+AppTraces
+| where Message startswith "No X-Correlation-ID"
+| summarize Minted = count() by bin(TimeGenerated, 5m)
